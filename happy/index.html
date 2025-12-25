@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Romantic Christmas</title>
+    <style>
+        /* 优化1：天空渲染
+           使用 CSS 径向渐变代替纯色背景。
+           中心偏下方(树的位置)也是暗色，但在树顶上方增加一点点暗紫色的光晕暗示，
+           整体保持"又黑又深邃"，但在视觉上与粉色树更融合。
+        */
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: radial-gradient(circle at 50% 40%, #2d1b2e 0%, #020c1b 60%, #000000 100%);
+            font-family: 'Arial', sans-serif;
+        }
+
+        /* 启动遮罩层 */
+        #start-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; justify-content: center; align-items: center; flex-direction: column;
+            z-index: 10; cursor: pointer; color: white; transition: opacity 1.5s ease-out;
+        }
+
+        h1 { margin: 0 0 20px 0; font-size: 2rem; text-align: center; color: #ffcce0; text-shadow: 0 0 20px #ff69b4; font-weight: 300; letter-spacing: 2px;}
+
+        .btn {
+            padding: 12px 40px; border: 1px solid rgba(255, 183, 197, 0.6); color: #ffcce0;
+            font-size: 1rem; border-radius: 50px; background: rgba(0,0,0,0.2);
+            backdrop-filter: blur(5px);
+            transition: 0.4s; box-shadow: 0 0 15px rgba(255, 183, 197, 0.1);
+            user-select: none; letter-spacing: 1px;
+        }
+        .btn:hover { background: rgba(255, 183, 197, 0.2); color: #fff; box-shadow: 0 0 25px rgba(255, 183, 197, 0.4); transform: scale(1.05); }
+
+        #signature {
+            position: absolute; bottom: 20px; width: 100%; text-align: center;
+            color: rgba(255, 255, 255, 0.3); font-size: 10px; font-family: sans-serif;
+            pointer-events: none; z-index: 5; letter-spacing: 3px; text-transform: uppercase;
+        }
+
+        /* 音乐控制按钮 */
+        #music-btn {
+            position: absolute; top: 30px; right: 30px; z-index: 8;
+            width: 36px; height: 36px; border-radius: 50%;
+            border: 1px solid rgba(255,255,255,0.2);
+            background: rgba(0,0,0,0.2); color: rgba(255,255,255,0.8);
+            display: flex; justify-content: center; align-items: center;
+            cursor: pointer; font-size: 16px; transition: 0.3s;
+            opacity: 0; pointer-events: none; backdrop-filter: blur(2px);
+        }
+        #music-btn.show { opacity: 1; pointer-events: auto; }
+        #music-btn:hover { background: rgba(255,255,255,0.1); transform: rotate(15deg); }
+    </style>
+</head>
+<body>
+
+<script>
+    // --- CONFIG ---
+    const CONFIG = {
+        text: {
+            greeting: "Merry Christmas To YOU！",
+            cardTitle: "🎁 A Romantic Gift",
+            buttonText: "Open Your Gift"
+        },
+
+        colors: {
+            // Overlay 背景保持深邃
+            overlayBg: "rgba(2, 12, 27, 0.95)",
+
+            // 树的配色
+            treeBase: "#ff3366", // 更深更艳的粉红，增加底部厚重感
+            treeTop:  "#ffe6ea", // 顶部近乎白色的粉
+
+            spiralWire: "#fff5e6",
+            bow: "#ffb7c5",
+            textRing: "rgba(255, 240, 245, 0.9)"
+        },
+
+        scene: {
+            // 优化1：增加粒子数量，解决"树体空"的问题
+            leafCount: 15000,
+            ornamentCount: 35,
+            ornaments: ['🔔', '🎁', '❄️', '🧸'],
+
+            // 摄像机最终位置
+            finalCamPos: { x: 0, y: 3.5, z: 8.5 },
+            finalTarget: { x: 0, y: 2.2, z: 0 },
+
+            // 进场动画参数
+            introDuration: 4.5,
+            introStartZ: 35,
+            introStartY: 8
+        },
+
+        bgmUrl: "song.mp3"
+    };
+</script>
+
+<audio id="bgm" loop preload="auto"></audio>
+<div id="music-btn">🎵</div>
+
+<div id="start-overlay">
+    <h1 id="card-title"></h1>
+    <div class="btn" id="start-btn"></div>
+    <p style="margin-top:20px; font-size: 0.7rem; color: rgba(255,255,255,0.4); letter-spacing: 1px;">( Turn up the volume )</p>
+</div>
+
+<div id="signature">Designed for Christmas 2025</div>
+
+<script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+
+<script>
+    // --- 0. UI 初始化 ---
+    document.getElementById('bgm').src = CONFIG.bgmUrl;
+    document.getElementById('card-title').innerText = CONFIG.text.cardTitle;
+    document.getElementById('start-btn').innerText = CONFIG.text.buttonText;
+    document.getElementById('start-overlay').style.background = CONFIG.colors.overlayBg;
+
+    // --- 资源缓存 ---
+    const textureCache = {};
+
+    function getSoftGlowTexture() {
+        if (textureCache['glow']) return textureCache['glow'];
+        const canvas = document.createElement('canvas');
+        canvas.width = 64; canvas.height = 64;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.2)'); // 稍微调低外圈透明度，让粒子更实
+        gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0,0,64,64);
+        const tex = new THREE.CanvasTexture(canvas);
+        textureCache['glow'] = tex;
+        return tex;
+    }
+
+    // [优化2]：地面光影渲染
+    // 渲染出温暖的感觉：中心有粉色光斑，向外过渡到纯白积雪
+    function getSnowGroundTexture() {
+        const canvas = document.createElement('canvas');
+        canvas.width = 512; canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        const gradient = ctx.createRadialGradient(256, 256, 0, 256, 256, 256);
+
+        // 中心：被树照亮的粉色
+        gradient.addColorStop(0, 'rgba(255, 182, 193, 0.6)');
+        // 中间：过渡到白色积雪
+        gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.4)');
+        // 边缘：渐隐
+        gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0,0,512,512);
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    // [优化3]：Emoji 黑框修复
+    // 移除深色阴影，增大Canvas尺寸避免边缘裁切
+    function getEmojiTexture(emoji) {
+        if (textureCache[emoji]) return textureCache[emoji];
+        const canvas = document.createElement('canvas');
+        canvas.width = 128; canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+
+        ctx.font = "90px serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        // 关键修复：移除可能导致黑边的 shadowBlur，或者将 shadowColor 设为淡粉色而不是默认黑
+        ctx.shadowColor = "rgba(255, 192, 203, 0.5)";
+        ctx.shadowBlur = 10;
+
+        ctx.fillText(emoji, 64, 68);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.minFilter = THREE.LinearFilter; // 保证缩放平滑
+        textureCache[emoji] = tex;
+        return tex;
+    }
+
+    // --- 1. 场景初始化 ---
+    const scene = new THREE.Scene();
+    // 关键：背景设置为 null，让 CSS 的渐变背景透出来
+    scene.background = null;
+    // 雾效调淡一点，配合 CSS 背景
+    scene.fog = new THREE.FogExp2(0x050505, 0.02);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, CONFIG.scene.introStartY, CONFIG.scene.introStartZ);
+    camera.lookAt(0, 2, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    // 开启 alpha 让 CSS 背景可见
+    renderer.setClearColor(0x000000, 0);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.05;
+    controls.enablePan = false;
+    controls.maxPolarAngle = Math.PI / 2 - 0.05;
+    controls.enabled = false;
+
+    // --- 2. 圣诞树构建 ---
+    const treeGroup = new THREE.Group();
+    scene.add(treeGroup);
+
+    // 2.1 树叶 (粒子优化)
+    const leafGeometry = new THREE.BufferGeometry();
+    const leafPositions = [];
+    const leafColors = [];
+    const colorBottom = new THREE.Color(CONFIG.colors.treeBase);
+    const colorTop = new THREE.Color(CONFIG.colors.treeTop);
+
+    for (let i = 0; i < CONFIG.scene.leafCount; i++) {
+        const y = Math.random() * 5.0;
+        // 优化：使用 Math.pow 让底部稍微宽一点
+        const maxRadius = (5.0 - y) * 0.5 + 0.2;
+
+        // 优化：不仅分布在表面，也填充内部 (r = maxRadius * sqrt(random))
+        // 这样树体就不会显得"空"
+        const r = maxRadius * Math.sqrt(Math.random());
+
+        const angle = Math.random() * Math.PI * 2;
+        leafPositions.push(Math.cos(angle) * r, y, Math.sin(angle) * r);
+
+        // 颜色计算
+        const alpha = y / 5.0;
+        const mixedColor = colorBottom.clone().lerp(colorTop, alpha);
+        // 增加粉色饱和度，防止太白
+        mixedColor.r += 0.1;
+        leafColors.push(mixedColor.r, mixedColor.g, mixedColor.b);
+    }
+
+    leafGeometry.setAttribute('position', new THREE.Float32BufferAttribute(leafPositions, 3));
+    leafGeometry.setAttribute('color', new THREE.Float32BufferAttribute(leafColors, 3));
+
+    const leafMaterial = new THREE.PointsMaterial({
+        size: 0.14, // 粒子增大，不再太细
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.9,
+        map: getSoftGlowTexture(),
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    treeGroup.add(new THREE.Points(leafGeometry, leafMaterial));
+
+    // 2.2 螺旋线
+    const spiralMaterial = new THREE.LineBasicMaterial({ color: CONFIG.colors.spiralWire, linewidth: 1, opacity: 0.4, transparent: true });
+    for(let j=0; j<4; j++) {
+        const points = [];
+        for(let i=0; i<=120; i++) {
+            const t = i / 120;
+            const y = t * 5.0;
+            const r = (5.0 - y) * 0.55; // 稍微比树大一点点
+            const angle = t * Math.PI * 7 + (j * Math.PI * 2 / 4);
+            points.push(new THREE.Vector3(Math.cos(angle)*r, y, Math.sin(angle)*r));
+        }
+        treeGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), spiralMaterial));
+    }
+
+    // 2.3 挂饰 (带修复的Emoji)
+    const ornamentList = CONFIG.scene.ornaments;
+    for(let i=0; i<CONFIG.scene.ornamentCount; i++) {
+        const emoji = ornamentList[Math.floor(Math.random() * ornamentList.length)];
+        // 使用修复后的 Emoji 纹理
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+            map: getEmojiTexture(emoji),
+            transparent: true,
+            opacity: 0.95,
+            // 关键：设置 alphaTest 避免透明边缘产生杂色
+            alphaTest: 0.1
+        }));
+
+        const y = Math.random() * 4.5 + 0.3;
+        const radius = (5.0 - y) * 0.45 + 0.2; // 稍微往外一点
+        const angle = Math.random() * Math.PI * 2;
+
+        sprite.position.set(Math.cos(angle) * radius, y, Math.sin(angle) * radius);
+        const scale = 0.35 + Math.random() * 0.15;
+        sprite.scale.set(scale, scale, 1);
+        treeGroup.add(sprite);
+    }
+
+    // 2.4 蝴蝶结
+    const bow = new THREE.Sprite(new THREE.SpriteMaterial({ map: getEmojiTexture("🎀"), transparent: true }));
+    bow.position.set(0, 5.2, 0);
+    bow.scale.set(1.3, 1.3, 1);
+    treeGroup.add(bow);
+
+    // 顶光
+    const topGlow = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: getSoftGlowTexture(), color: "#ff69b4", transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending
+    }));
+    topGlow.scale.set(4, 4, 1);
+    bow.add(topGlow);
+
+    // --- 3. 环绕文字 ---
+    function createCurvedText(text) {
+        const radius = 3.8;
+        const height = 1.5;
+        const canvas = document.createElement('canvas');
+        canvas.width = 2048; canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        ctx.font = "Bold 90px Arial";
+        ctx.fillStyle = CONFIG.colors.textRing;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        // 文字发光也改为粉色
+        ctx.shadowColor = "#ff69b4";
+        ctx.shadowBlur = 15;
+        ctx.fillText(text, 1024, 128);
+
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+        const mat = new THREE.MeshBasicMaterial({
+            map: tex, transparent: true, side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending
+        });
+        const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, height, 64, 1, true), mat);
+        mesh.position.y = 1.2;
+        return mesh;
+    }
+    const textRing = createCurvedText(CONFIG.text.greeting);
+    scene.add(textRing);
+
+    // --- 4. 地面优化 ---
+    const groundGeo = new THREE.PlaneGeometry(30, 30); // 扩大地面
+    const groundMat = new THREE.MeshBasicMaterial({
+        map: getSnowGroundTexture(), // 使用带粉色反光的纹理
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending
+    });
+    const ground = new THREE.Mesh(groundGeo, groundMat);
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.y = -0.1;
+    scene.add(ground);
+
+    // 环境雪花
+    const snowGeo = new THREE.BufferGeometry();
+    const snowPos = [];
+    const snowSpeeds = [];
+    for(let i=0; i<1000; i++) { // 增加雪花
+        snowPos.push((Math.random()-0.5)*30, Math.random()*20, (Math.random()-0.5)*30);
+        snowSpeeds.push(0.02 + Math.random() * 0.04);
+    }
+    snowGeo.setAttribute('position', new THREE.Float32BufferAttribute(snowPos, 3));
+    const snowSystem = new THREE.Points(snowGeo, new THREE.PointsMaterial({
+        color: 0xffffff, size: 0.15, transparent: true, opacity: 0.8, map: getSoftGlowTexture(), depthWrite: false
+    }));
+    scene.add(snowSystem);
+
+    // --- 5. 动画系统 ---
+    const clock = new THREE.Clock();
+    let isIntroPlaying = false;
+    let introStartTime = 0;
+
+    const audio = document.getElementById('bgm');
+    const musicBtn = document.getElementById('music-btn');
+    let isMusicPlaying = false;
+    musicBtn.addEventListener('click', () => {
+        if(isMusicPlaying) {
+            audio.pause();
+            musicBtn.innerText = "🔇";
+            musicBtn.style.opacity = "0.5";
+        } else {
+            audio.play();
+            musicBtn.innerText = "🎵";
+            musicBtn.style.opacity = "1";
+        }
+        isMusicPlaying = !isMusicPlaying;
+    });
+
+    function easeOutCubic(x) { return 1 - Math.pow(1 - x, 3); }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        const time = clock.getElapsedTime();
+
+        // 场景动态
+        treeGroup.rotation.y = time * 0.1;
+        bow.rotation.z = Math.sin(time * 2) * 0.1;
+        textRing.rotation.y = -time * 0.15;
+        textRing.position.y = 1.2 + Math.sin(time*0.8) * 0.1;
+
+        // 雪花下落
+        const positions = snowSystem.geometry.attributes.position.array;
+        for(let i=0; i<1000; i++) {
+            positions[i*3 + 1] -= snowSpeeds[i];
+            if (positions[i*3 + 1] < 0) positions[i*3 + 1] = 20;
+        }
+        snowSystem.geometry.attributes.position.needsUpdate = true;
+
+        if (isIntroPlaying) {
+            const elapsed = time - introStartTime;
+            const progress = Math.min(elapsed / CONFIG.scene.introDuration, 1);
+            const ease = easeOutCubic(progress);
+
+            const currentY = CONFIG.scene.introStartY + (CONFIG.scene.finalCamPos.y - CONFIG.scene.introStartY) * ease;
+            const currentZ = CONFIG.scene.introStartZ + (CONFIG.scene.finalCamPos.z - CONFIG.scene.introStartZ) * ease;
+            camera.position.set(0, currentY, currentZ);
+
+            const lookAtY = 2.0 + (CONFIG.scene.finalTarget.y - 2.0) * ease;
+            camera.lookAt(0, lookAtY, 0);
+
+            if (progress >= 1) {
+                isIntroPlaying = false;
+                camera.position.set(CONFIG.scene.finalCamPos.x, CONFIG.scene.finalCamPos.y, CONFIG.scene.finalCamPos.z);
+                controls.target.set(CONFIG.scene.finalTarget.x, CONFIG.scene.finalTarget.y, CONFIG.scene.finalTarget.z);
+                controls.enabled = true;
+                controls.update();
+                musicBtn.classList.add('show');
+            }
+        } else {
+            controls.update();
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    const overlay = document.getElementById('start-overlay');
+    overlay.addEventListener('click', function() {
+        audio.play().then(() => { isMusicPlaying = true; }).catch(console.error);
+        this.style.opacity = '0';
+        setTimeout(() => { this.style.display = 'none'; }, 1500);
+
+        introStartTime = clock.getElapsedTime();
+        isIntroPlaying = true;
+        animate();
+    });
+
+</script>
+</body>
+</html>
